@@ -1,3 +1,4 @@
+from threading import currentThread
 from PIL import Image
 import operator
 import math
@@ -41,9 +42,36 @@ class ImageModifier:
         return Image.fromarray(blend_image.astype(np.uint8))
 
     @staticmethod
+    def find_ratio(x: int, y: int) -> tuple[int, int]:
+        ratio = -1
+        res = (-1, -1)
+        target = x * 1.0 / y
+        eps = 1e-9
+        logger.info("%d/%d = %f", x, y, target)
+
+        def distance(current: float) -> float:
+            return math.fabs(current - target)
+
+        for i in range(1, 20):
+            for j in range(1, i + 1):
+                current_ratio = i / j
+                if (
+                    ratio == -1
+                    or distance(ratio) - eps > distance(current_ratio)
+                    or math.fabs(distance(ratio) - distance(current_ratio)) < eps
+                    and i + j <= res[0] + res[1]
+                ):
+                    ratio = current_ratio
+                    res = (i, j)
+        return res
+
+    @staticmethod
     def get_blured(image_path, properties):
         image = Image.open(image_path)
         x_len, y_len = image.size
+
+        xx, yy = ImageModifier.find_ratio(x_len, y_len)
+
         # upscale
         factor = properties["upsample"]
         image = image.resize((x_len * factor, y_len * factor))
@@ -51,20 +79,17 @@ class ImageModifier:
         res_image = Image.new("RGB", image.size)
 
         logger.info(f"img size {x_len}, {y_len}")
-        gcd = math.gcd(x_len, y_len)
-
-        xx, yy = x_len // gcd, y_len // gcd
-
-        logger.info("%d, %d", xx, yy)
+        logger.info("atomic-xy: (%d, %d)", xx, yy)
 
         estimated_length = round(y_len / properties["box"])
 
         box = {
-            "y": int(math.ceil(1. * estimated_length / yy) * yy + 1e-12),
+            "y": int(math.ceil(1.0 * estimated_length / yy) * yy + 1e-12),
         }
         box["x"] = box["y"] * xx // yy
 
         logger.info(f"x, y: {box['x']}, {box['y']}")
+
         count = (math.ceil(x_len / box["x"]), math.ceil(y_len / box["y"]))
         mean_rgb = [[(0, 0, 0) for _ in range(count[0])] for _ in range(count[1])]
         data = list(image.getdata())  # pyright: ignore
@@ -116,9 +141,7 @@ class ImageModifier:
 
 
 def construct_box(image, images, mean_rgb, properties):
-    final_image_height = (
-            properties["final_box_height"] * properties["dimensions"]["x"]
-    )
+    final_image_height = properties["final_box_height"] * properties["dimensions"]["x"]
     image = image.resize(
         (
             final_image_height,
@@ -145,9 +168,7 @@ def construct_box(image, images, mean_rgb, properties):
             terminal_process.hit()
 
             temp_image = Image.open(images[index])
-            temp_image = temp_image.resize(
-                (math.ceil(box["x"]), math.ceil(box["y"]))
-            )
+            temp_image = temp_image.resize((math.ceil(box["x"]), math.ceil(box["y"])))
             img_np = np.array(temp_image).astype(np.float32)
             img_np = (img_np * alpha) + (np.array(mean_rgb[j][i]) * beta)
 
