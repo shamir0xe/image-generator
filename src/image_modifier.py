@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 from src.utils.terminal_process import TerminalProcess
 
-Image.MAX_IMAGE_PIXELS = 1176120000 + 10
+Image.MAX_IMAGE_PIXELS = 2557302128 + 10
 
 
 class ImageModifier:
@@ -53,7 +53,7 @@ class ImageModifier:
             return math.fabs(current - target)
 
         for i in range(1, 20):
-            for j in range(1, i + 1):
+            for j in range(1, 20):
                 current_ratio = i / j
                 if (
                     ratio == -1
@@ -140,6 +140,27 @@ class ImageModifier:
         return rgb
 
 
+def get_best_image(path: str, box: tuple) -> Image.Image:
+    img = Image.open(path)
+    x, y = img.size
+    ratio = box[0] / box[1]
+    if x / y > ratio + 1e-9:
+        k = box[1] / y
+        delta_x = (k * x - box[0]) // 2
+        delta_y = 0
+    else:
+        k = box[0] / x
+        delta_x = 0
+        delta_y = (k * y - box[1]) // 2
+
+    img = img.resize((math.ceil(k * x), math.ceil(k * y)))
+    img = img.crop((delta_x, delta_y, img.size[0] - delta_x, img.size[1] - delta_y))
+
+    # img = img.resize((math.ceil(box[0]), math.ceil(box[1])))
+
+    return img
+
+
 def construct_box(image, images, mean_rgb, properties):
     final_image_height = properties["final_box_height"] * properties["dimensions"]["x"]
     image = image.resize(
@@ -156,19 +177,22 @@ def construct_box(image, images, mean_rgb, properties):
 
     canvas_np = np.array(image).astype(np.float32)
 
-    box = {
-        "y": math.ceil(y_len / properties["dimensions"]["y"]),
-    }
-    box["x"] = math.ceil(box["y"] * properties["ratio"])
     count = (properties["dimensions"]["x"], properties["dimensions"]["y"])
+    # Derive the cell size from the canvas so the grid always tiles exactly.
+    # (Deriving box["x"] from box["y"] * ratio could round above the per-column
+    # budget and push the last columns past the canvas edge.) Frames are still
+    # cover-cropped to the cell in get_best_image, never stretched.
+    box = {
+        "x": math.ceil(x_len / count[0]),
+        "y": math.ceil(y_len / count[1]),
+    }
     terminal_process = TerminalProcess(count[0] * count[1])
     for i in range(count[0]):
         for j in range(count[1]):
             index = count[0] * j + i
             terminal_process.hit()
 
-            temp_image = Image.open(images[index])
-            temp_image = temp_image.resize((math.ceil(box["x"]), math.ceil(box["y"])))
+            temp_image = get_best_image(images[index], (box["x"], box["y"]))
             img_np = np.array(temp_image).astype(np.float32)
             img_np = (img_np * alpha) + (np.array(mean_rgb[j][i]) * beta)
 
@@ -182,6 +206,8 @@ def construct_box(image, images, mean_rgb, properties):
                 y_start:y_end,
                 x_start:x_end,
             ] = img_np[: y_end - y_start, : x_end - x_start]
+
+            temp_image.close()
 
     canvas_np = canvas_np.clip(0, 255)
     canvas_np = canvas_np.astype(np.uint8)
