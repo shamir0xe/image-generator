@@ -287,6 +287,14 @@ def main(
                 "instead of using the raw movie frames (alpha=1, beta=0)"
             ),
         ] = False,
+        by_width: Annotated[
+            bool,
+            typer.Option(
+                "--by-width/--by-height",
+                help="Count `box` tiles along the image width instead of its "
+                "height (denser mosaic when frames are wide)",
+            ),
+        ] = False,
 ):
     logging.info(f"Processing {movie_name}.{movie_format}")
 
@@ -301,23 +309,34 @@ def main(
     if not colored:
         envs["alpha"], envs["beta"] = 1.0, 0.0
 
+    logger.info("Retrieving frames")
+    movie_frames = get_movie_frames(standard_name, envs, generate_frames)
+
+    # The frame aspect ratio drives the mosaic tiles so whole frames fit without
+    # cropping. Use the crop_box if set in .env, otherwise read it off a frame.
+    crop_x, crop_y = envs["crop_box"]
+    if crop_x > 0 and crop_y > 0:
+        envs["ratio"] = crop_x / crop_y
+    else:
+        with Image.open(movie_frames[0]) as sample_frame:
+            envs["ratio"] = sample_frame.size[0] / sample_frame.size[1]
+    logger.info(f"frame ratio = {envs['ratio']:.4f}")
+
     logger.info("Building blured image...")
     image, mean_rgbs = ImageModifier.get_blured(
         envs["image_path"],
         {
             "box": envs["box"],
             "upsample": envs["upsample"],
+            "ratio": envs["ratio"],
+            "box_axis": "width" if by_width else "height",
         },
     )
     image.show(movie_name)
     image.save(f"assets/{standard_name}.png")
-    envs["ratio"] = image.size[0] / image.size[1]
 
     dimensions = (len(mean_rgbs[0]), len(mean_rgbs))
     logger.info(f"dimensions = {dimensions}")
-
-    logger.info("Retrieving frames")
-    movie_frames = get_movie_frames(standard_name, envs, generate_frames)
 
     logger.info("Calculating rgbs for frames...")
     movie_rgbs = calculate_movie_rgbs(standard_name, movie_frames, envs)

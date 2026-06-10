@@ -70,8 +70,6 @@ class ImageModifier:
         image = Image.open(image_path)
         x_len, y_len = image.size
 
-        xx, yy = ImageModifier.find_ratio(x_len, y_len)
-
         # upscale
         factor = properties["upsample"]
         image = image.resize((x_len * factor, y_len * factor))
@@ -79,14 +77,17 @@ class ImageModifier:
         res_image = Image.new("RGB", image.size)
 
         logger.info(f"img size {x_len}, {y_len}")
-        logger.info("atomic-xy: (%d, %d)", xx, yy)
 
-        estimated_length = round(y_len / properties["box"])
-
-        box = {
-            "y": int(math.ceil(1.0 * estimated_length / yy) * yy + 1e-12),
-        }
-        box["x"] = box["y"] * xx // yy
+        # Cells take the frame's aspect ratio so whole frames tile the target
+        # without cropping. `box` is the number of cells along one axis: by
+        # height (default) the cell count follows the height, by width it
+        # follows the width -- pick whichever keeps the mosaic dense enough.
+        if properties.get("box_axis", "height") == "width":
+            box = {"x": max(1, round(x_len / properties["box"]))}
+            box["y"] = max(1, round(box["x"] / properties["ratio"]))
+        else:
+            box = {"y": max(1, round(y_len / properties["box"]))}
+            box["x"] = max(1, round(box["y"] * properties["ratio"]))
 
         logger.info(f"x, y: {box['x']}, {box['y']}")
 
@@ -140,72 +141,40 @@ class ImageModifier:
         return rgb
 
 
-def get_best_image(path: str, box: tuple) -> Image.Image:
-    img = Image.open(path)
-    x, y = img.size
-    ratio = box[0] / box[1]
-    if x / y > ratio + 1e-9:
-        k = box[1] / y
-        delta_x = (k * x - box[0]) // 2
-        delta_y = 0
-    else:
-        k = box[0] / x
-        delta_x = 0
-        delta_y = (k * y - box[1]) // 2
-
-    img = img.resize((math.ceil(k * x), math.ceil(k * y)))
-    img = img.crop((delta_x, delta_y, img.size[0] - delta_x, img.size[1] - delta_y))
-
-    # img = img.resize((math.ceil(box[0]), math.ceil(box[1])))
-
-    return img
-
-
 def construct_box(image, images, mean_rgb, properties):
-    final_image_height = properties["final_box_height"] * properties["dimensions"]["x"]
-    image = image.resize(
-        (
-            final_image_height,
-            int(final_image_height * image.size[1] / image.size[0]),
-        )
-    )
     alpha, beta = (
         properties["color_mixtures"]["alpha"],
         properties["color_mixtures"]["beta"],
     )
-    x_len, y_len = image.size
+    count = (properties["dimensions"]["x"], properties["dimensions"]["y"])
+
+    # Each tile takes the frame's aspect ratio, so a whole frame drops in with a
+    # plain resize -- no cropping, no stretching (only the optional crop_box
+    # applied at sampling time changes a frame). The canvas is sized to the tile
+    # grid exactly so every cell lands inside it.
+    box = {"x": properties["final_box_height"]}
+    box["y"] = max(1, round(box["x"] / properties["ratio"]))
+    x_len, y_len = box["x"] * count[0], box["y"] * count[1]
+    image = image.resize((x_len, y_len))
 
     canvas_np = np.array(image).astype(np.float32)
 
-    count = (properties["dimensions"]["x"], properties["dimensions"]["y"])
-    # Derive the cell size from the canvas so the grid always tiles exactly.
-    # (Deriving box["x"] from box["y"] * ratio could round above the per-column
-    # budget and push the last columns past the canvas edge.) Frames are still
-    # cover-cropped to the cell in get_best_image, never stretched.
-    box = {
-        "x": math.ceil(x_len / count[0]),
-        "y": math.ceil(y_len / count[1]),
-    }
     terminal_process = TerminalProcess(count[0] * count[1])
     for i in range(count[0]):
         for j in range(count[1]):
             index = count[0] * j + i
             terminal_process.hit()
 
-            temp_image = get_best_image(images[index], (box["x"], box["y"]))
+            temp_image = Image.open(images[index]).resize((box["x"], box["y"]))
             img_np = np.array(temp_image).astype(np.float32)
             img_np = (img_np * alpha) + (np.array(mean_rgb[j][i]) * beta)
 
-            y_start = math.floor(j * box["y"])
-            x_start = math.floor(i * box["x"])
-
-            y_end = min(y_start + box["y"], y_len)
-            x_end = min(x_start + box["x"], x_len)
-
+            y_start = j * box["y"]
+            x_start = i * box["x"]
             canvas_np[
-                y_start:y_end,
-                x_start:x_end,
-            ] = img_np[: y_end - y_start, : x_end - x_start]
+                y_start : y_start + box["y"],
+                x_start : x_start + box["x"],
+            ] = img_np
 
             temp_image.close()
 
