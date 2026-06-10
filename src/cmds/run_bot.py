@@ -145,15 +145,15 @@ def calculate_movie_rgbs(
         with open(frame_rgbs_file, "r") as f:
             reader = csv.reader(f)
             for row in reader:
-                time, r, g, b = row
-                rgbs[time] = tuple(map(int, (r, g, b)))
+                filename, r, g, b = row
+                rgbs[filename] = tuple(map(int, (r, g, b)))
 
         for frame_path in movie_frames:
-            pattern = r".*-(\d+).jpg$"
+            pattern = r".*\/(.+).jpg$"
             match = re.search(pattern, frame_path)
             if match:
-                time = match.groups()[0]
-                movie_rgbs.append(rgbs[time])
+                filename = match.groups()[0]
+                movie_rgbs.append(rgbs[filename])
             else:
                 raise Exception("invalid time!")
 
@@ -168,18 +168,16 @@ def calculate_movie_rgbs(
         with open(frame_rgbs_file, "w") as f:
             writer = csv.writer(f)
             for frame in all_frames:
-                if not our_filename(frame, standard_name):
-                    continue
                 terminal_process.hit()
                 rgb = ImageModifier.get_mean_rgb(
                     ImageModifier.open(os.path.join(envs["movie_frames_path"], frame))
                 )
-                pattern = r"-(\d+).jpg$"
+                pattern = r"(.+).jpg$"
                 match = re.search(pattern, frame)
                 if not match:
                     raise Exception("invalid frame")
-                time = match.groups()[0]
-                writer.writerow([time, *rgb])
+                filename = match.groups()[0]
+                writer.writerow([filename, *rgb])
 
     return resolve()
 
@@ -213,6 +211,10 @@ def crop_image(img: Image.Image) -> Image.Image:
     target_ratio: float = target_width / target_height
 
     img_width, img_height = img.size
+
+    if (1 - img_width / img_height) * (1 - target_ratio) < 1e-9:
+        target_width, target_height = target_height, target_width
+        target_ratio = target_width / target_height
 
     if img_width / img_height > target_ratio:
         delta_h = 0
@@ -278,6 +280,13 @@ def main(
         target_img: Annotated[str | None, typer.Option(help="Target image")] = None,
         upsample: Annotated[int | None, typer.Option(help="Upsample factor")] = None,
         capacity: Annotated[int | None, typer.Option(help="Capacity")] = None,
+        colored: Annotated[
+            bool,
+            typer.Option(
+                help="Tint frames with the target colors (alpha/beta from .env) "
+                "instead of using the raw movie frames (alpha=1, beta=0)"
+            ),
+        ] = False,
 ):
     logging.info(f"Processing {movie_name}.{movie_format}")
 
@@ -287,6 +296,10 @@ def main(
     standard_name = movie_standard_name(movie_name)
     envs["movie_frames_path"] = os.path.join(envs["movie_frames_path"], standard_name)
     envs["upsample"] = upsample if upsample is not None else envs["upsample"]
+    # Colored mode keeps the alpha/beta loaded from .env; raw mode shows the
+    # untinted movie frames.
+    if not colored:
+        envs["alpha"], envs["beta"] = 1.0, 0.0
 
     logger.info("Building blured image...")
     image, mean_rgbs = ImageModifier.get_blured(
