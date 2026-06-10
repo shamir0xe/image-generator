@@ -1,36 +1,124 @@
 # image-generator
-Cool project to help you hang your favorite movies on your wall :)
 
-## Manual
+Turn a movie into a photo-mosaic poster of your favourite still — every tile of
+the picture is a frame from the film, color-matched to the original image.
 
-Copy `sample.env` into the `.env` and modify its values.
+The tool samples frames across a movie, measures each frame's average color, and
+then solves a min-cost matching so that every cell of a target image is filled
+with the movie frame whose color is closest. The result is a large poster of the
+target image rendered entirely out of the movie's own frames. Hang your
+favourite movie on your wall :)
 
-Available options are:
-* movie_path: Path of the movie
-* image_path: Path of the target image
-* movie_frames_path: Path where the frames would be store
-* frame_count_per_box: Maximum number of times a frame can appear in the result picture
-* final_box_height: The height of the final boxes (frames) in the result picture
-* box: How many frames should be located on top of each other on each column
-* ratio: Ratio of the movie frames (width / height)
-* alpha\[blend\]: How much the frame should be itself: (0, 1)
-* beta\[blend\]: How much the frame should fade into the target picture
+## How it works
 
+1. **Blur the target** — the target image is divided into a grid of cells; each
+   cell's mean color is recorded.
+2. **Sample frames** — one frame per second of runtime is grabbed from the
+   movie, shuffled, and cached.
+3. **Measure frame colors** — each frame's average RGB is computed (and cached
+   to a CSV).
+4. **Match** — a min-cost-flow solver assigns a frame to every cell, minimising
+   total color distance while limiting how often any frame is reused.
+5. **Render** — each chosen frame is cover-cropped into its cell (never
+   stretched) and optionally tinted toward the target color.
 
-1) You need to generate movie frames for the specific movie for the first time:
+## Requirements
+
+- Python 3.12+
+- [ImageMagick](https://imagemagick.org/) (`convert` on your `PATH`, used for the
+  final resize)
+- A movie file and a target image
+
+## Installation
+
 ```bash
-python main.py gen --movie-name "Paris Texas" --movie-format "mkv" --generate-frames
+git clone --recurse-submodules https://github.com/shamir0xe/image-generator.git
+cd image-generator
+# if you already cloned without --recurse-submodules:
+git submodule update --init --recursive
+
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-After that, you can omit the "--generate-frames" flag.
-You can remove the resulted frames in the output directory. But keep in mind that don't add new ones to the folder, if you do so you need to manually remove the `{movie_name}.csv` file located at the `assets/` folder.
+> The `pylib_0xe` dependency is vendored as a git submodule (`libs/PythonLibrary`),
+> so the `--recurse-submodules` step is required.
 
-2) If something went wrong, just remove the cache for the specific movie:
+## Configuration
+
+Copy the sample env file and edit the values:
 
 ```bash
+cp sample.env .env
+```
+
+`sample.env` documents every option inline. The most important ones:
+
+| Variable | Meaning |
+| --- | --- |
+| `movie_path` | Folder containing your movie files |
+| `image_path` | Default target image (override per-run with `--target-img`) |
+| `movie_frames_path` | Where sampled frames are cached |
+| `box` | Frame cells stacked vertically per column (mosaic resolution) |
+| `frame_count_per_box` | Size of the frame pool sampled from the movie |
+| `final_box_height` | Pixel height of each frame cell in the output |
+| `upsample` | Upscale factor applied to the target before processing |
+| `alpha` / `beta` | Color blend: `output = frame*alpha + target_color*beta` |
+| `crop_box_x` / `crop_box_y` | Optional center-crop of sampled frames |
+
+## Usage
+
+The CLI is built with [Typer](https://typer.tiangolo.com/); run any command with
+`--help` for details.
+
+### Generate a poster
+
+First run (extract frames from the movie, then build the poster):
+
+```bash
+python main.py gen --movie-name "Paris Texas" --movie-format mkv --generate-frames
+```
+
+On later runs the cached frames are reused — drop `--generate-frames`:
+
+```bash
+python main.py gen --movie-name "Paris Texas" --movie-format mkv
+```
+
+Useful options:
+
+- `--target-img <path>` — render a specific target image.
+- `--colored` — tint the frames toward the target colors (uses `alpha`/`beta`
+  from `.env`). Without it, the raw, untinted movie frames are used.
+- `--upsample <n>` — override the upscale factor.
+- `--capacity <n>` — cap how many times any single frame may be reused (by
+  default the best capacity is found automatically).
+
+Output is written to `outputs/` (a full-resolution version and an A3-cropped,
+downscaled `-final` version).
+
+### Other commands
+
+```bash
+# Only sample frames from a movie (no poster)
+python main.py sampling --movie-name "Paris Texas"
+
+# Crop any image to A3 ratio and downscale it
+python main.py crop --image-path path/to/image.jpg
+
+# Clear the cached frames + color CSV for a movie
 python main.py clear-cache --movie-name "Paris Texas"
 ```
 
-3) \[TODO:\] `modify` command for some cool features!
+## Caching notes
 
+Frames and their measured colors are cached per movie under
+`movie_frames_path/<movie>/` and `assets/<movie>-<frame_count_per_box>.csv`.
 
+If you manually add or remove frames in a movie's frame folder, delete the
+matching `assets/<movie>-*.csv` so the color cache is rebuilt — otherwise the
+results will be inconsistent. When in doubt, run `clear-cache` and regenerate.
+
+## License
+
+[MIT](LICENSE) © Amirhossein Shapoori
