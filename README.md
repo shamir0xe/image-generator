@@ -9,6 +9,11 @@ with the movie frame whose color is closest. The result is a large poster of the
 target image rendered entirely out of the movie's own frames. Hang your
 favourite movie on your wall :)
 
+![Sample poster generated from The Big Lebowski](docs/sample-output.jpg)
+
+> A poster built entirely from frames of *The Big Lebowski* — zoom in and every
+> tile is a still from the film.
+
 ## How it works
 
 1. **Blur the target** — the target image is divided into a grid of cells; each
