@@ -67,7 +67,7 @@ class ImageModifier:
 
     @staticmethod
     def get_blured(image_path, properties):
-        image = Image.open(image_path)
+        image = image_path if isinstance(image_path, Image.Image) else Image.open(image_path)
         x_len, y_len = image.size
 
         # upscale

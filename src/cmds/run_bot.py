@@ -326,8 +326,12 @@ def main(
     logger.info(f"frame ratio = {envs['ratio']:.4f}")
 
     logger.info("Building blured image...")
+    # Crop the target to the final A3 region up front so `box` counts tiles in
+    # the image we actually keep (the end-of-pipeline crop would otherwise trim
+    # rows/columns the grid had already counted).
+    target = crop_image(Image.open(envs["image_path"]))
     image, mean_rgbs = ImageModifier.get_blured(
-        envs["image_path"],
+        target,
         {
             "box": envs["box"],
             "upsample": envs["upsample"],
