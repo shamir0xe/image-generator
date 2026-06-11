@@ -16,16 +16,20 @@ favourite movie on your wall :)
 
 ## How it works
 
-1. **Blur the target** — the target image is divided into a grid of cells; each
-   cell's mean color is recorded.
+1. **Crop & blur the target** — the target is cropped to the output (A3) region,
+   then divided into a grid of *frame-shaped* cells; each cell's mean color is
+   recorded.
 2. **Sample frames** — one frame per second of runtime is grabbed from the
    movie, shuffled, and cached.
 3. **Measure frame colors** — each frame's average RGB is computed (and cached
    to a CSV).
 4. **Match** — a min-cost-flow solver assigns a frame to every cell, minimising
-   total color distance while limiting how often any frame is reused.
-5. **Render** — each chosen frame is cover-cropped into its cell (never
-   stretched) and optionally tinted toward the target color.
+   total color distance while limiting how often any frame is reused. Each cell
+   is only connected to its closest frames in color space (a KD-tree k-nearest
+   search) so the graph stays small and the solve stays fast.
+5. **Render** — each chosen frame is placed *whole* into its cell — resized to
+   the cell, never cropped or stretched (the cell already matches the frame's
+   aspect ratio) — and optionally tinted toward the target color.
 
 ## Requirements
 
@@ -62,11 +66,12 @@ cp sample.env .env
 | `movie_path` | Folder containing your movie files |
 | `image_path` | Default target image (override per-run with `--target-img`) |
 | `movie_frames_path` | Where sampled frames are cached |
-| `box` | Frame cells stacked vertically per column (mosaic resolution) |
+| `box` | Number of tiles along the counted axis (see `--by-width`/`--by-height`) — controls mosaic resolution |
 | `frame_count_per_box` | Size of the frame pool sampled from the movie |
-| `final_box_height` | Pixel height of each frame cell in the output |
+| `final_box_height` | Pixel size of each frame tile in the output |
 | `upsample` | Upscale factor applied to the target before processing |
 | `alpha` / `beta` | Color blend: `output = frame*alpha + target_color*beta` |
+| `knn_ratio` | Fraction of nearest frames each cell may match (lower = faster, less memory; e.g. `0.1` = 10%) |
 | `crop_box_x` / `crop_box_y` | Optional center-crop of sampled frames |
 
 ## Usage
@@ -93,12 +98,16 @@ Useful options:
 - `--target-img <path>` — render a specific target image.
 - `--colored` — tint the frames toward the target colors (uses `alpha`/`beta`
   from `.env`). Without it, the raw, untinted movie frames are used.
+- `--box <n>` — override the `.env` tile count for this run.
+- `--by-width` / `--by-height` — count `box` tiles along the image's width or
+  height (default `--by-height`). Use `--by-width` for a denser mosaic when the
+  frames are wide.
 - `--upsample <n>` — override the upscale factor.
 - `--capacity <n>` — cap how many times any single frame may be reused (by
   default the best capacity is found automatically).
 
-Output is written to `outputs/` (a full-resolution version and an A3-cropped,
-downscaled `-final` version).
+Output is written to `outputs/` — a full-resolution A3 poster and a downscaled
+`-final` preview.
 
 ### Other commands
 
