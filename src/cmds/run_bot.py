@@ -33,7 +33,8 @@ def read_envs() -> dict[str, Any]:
         "alpha": float(os.getenv("alpha", 0)),
         "beta": float(os.getenv("beta", 0)),
         "crop_box": (int(os.getenv("crop_box_x", 0)), int(os.getenv("crop_box_y", 0))),
-        "upsample": int(os.getenv("upsample", 2))
+        "upsample": int(os.getenv("upsample", 2)),
+        "knn_ratio": float(os.getenv("knn_ratio", 0.1))
     }
 
 
@@ -344,7 +345,7 @@ def main(
     movie_rgbs = calculate_movie_rgbs(standard_name, movie_frames, envs)
 
     logger.info("Running MaxMatcher algorithm...")
-    max_matcher = MinCostMatcher(mean_rgbs, movie_rgbs)
+    max_matcher = MinCostMatcher(mean_rgbs, movie_rgbs, envs["knn_ratio"])
     if capacity is not None:
         order = max_matcher.solve(capacity)[0]
     else:

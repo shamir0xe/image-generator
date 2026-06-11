@@ -6,3 +6,4 @@ ortools
 opencv-python
 python-dotenv
 torch
+scipy
