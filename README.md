@@ -30,8 +30,6 @@ favourite movie on your wall :)
 ## Requirements
 
 - Python 3.12+
-- [ImageMagick](https://imagemagick.org/) (`convert` on your `PATH`, used for the
-  final resize)
 - A movie file and a target image
 
 ## Installation

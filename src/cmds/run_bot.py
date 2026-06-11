@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 import logging
 import csv
 from PIL import Image
-import subprocess
 
 from pathlib import Path
 from pylib_0xe.file.file import File
@@ -230,16 +229,14 @@ def crop_image(img: Image.Image) -> Image.Image:
     return cropped_img
 
 
-def final_job(cropped_name: str) -> None:
+def final_job(img: Image.Image, name: str, scale: float = 0.4) -> None:
     logger.info("Resizing the final image...")
-    output_path = Path("outputs")
-    with subprocess.Popen(
-            ["convert", "-resize", "40%", output_path / f"{cropped_name}.jpg",
-             output_path / f"{cropped_name}-final.jpg"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
-        p.wait()
-        logger.info("err: %s", p.stderr.read())
-        logger.info("out: %s", p.stdout.read())
+    w, h = img.size
+    resized = img.resize(
+        (max(1, round(w * scale)), max(1, round(h * scale))),
+        Image.LANCZOS,
+    )
+    resized.save(Path("outputs") / f"{name}-final.jpg")
 
 
 @app.command(name="sampling")
@@ -265,7 +262,7 @@ def crop(image_path: Annotated[str, typer.Option(help="The image path")]):
     img = crop_image(img)
     image_name = Path(image_path).stem + "-a3"
     img.save(Path("outputs") / f"{image_name}.jpg")
-    final_job(image_name)
+    final_job(img, image_name)
 
 
 @app.command(name="gen")
@@ -364,4 +361,4 @@ def main(
     final_name = save_out_image(final_image, standard_name)
     cropped_image = crop_image(final_image)
     cropped_name = save_out_image(cropped_image, f"{final_name}-a3", annotate=False)
-    final_job(cropped_name)
+    final_job(cropped_image, cropped_name)
