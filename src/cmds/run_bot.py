@@ -275,6 +275,10 @@ def main(
             bool, typer.Option(help="Force to generate frames from the movie")
         ] = False,
         target_img: Annotated[str | None, typer.Option(help="Target image")] = None,
+        box: Annotated[
+            int | None,
+            typer.Option(help="Number of tiles along the chosen axis (see --by-width)"),
+        ] = None,
         upsample: Annotated[int | None, typer.Option(help="Upsample factor")] = None,
         capacity: Annotated[int | None, typer.Option(help="Capacity")] = None,
         colored: Annotated[
@@ -301,6 +305,7 @@ def main(
     standard_name = movie_standard_name(movie_name)
     envs["movie_frames_path"] = os.path.join(envs["movie_frames_path"], standard_name)
     envs["upsample"] = upsample if upsample is not None else envs["upsample"]
+    envs["box"] = box if box is not None else envs["box"]
     # Colored mode keeps the alpha/beta loaded from .env; raw mode shows the
     # untinted movie frames.
     if not colored:
