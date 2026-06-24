@@ -292,7 +292,7 @@ def main(
                 "'lab' (perceptual), or 'lab-norm' (lab + align target "
                 "exposure/contrast to the frame palette)",
             ),
-        ] = "lab-norm",
+        ] = "lab",
 ):
     logging.info(f"Processing {movie_name}.{movie_format}")
 
