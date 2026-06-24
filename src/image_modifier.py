@@ -75,6 +75,9 @@ class ImageModifier:
         th = y_len / rows
         tw = th * ratio
         box_w, box_h = max(1, round(tw)), max(1, round(th))
+        # Bleed for rotated preview blocks so they overlap rather than leave
+        # seams -- mirrors the same trick in construct_box.
+        bleed = max(1, round(box_h * 0.06))
         # A square crop big enough to hold the tile at any rotation.
         diag = int(math.ceil(math.hypot(box_w, box_h)))
         c = diag / 2.0
@@ -113,10 +116,12 @@ class ImageModifier:
             mean_rgb.append(rgb)  # pyright: ignore
 
             # Draw the cell into the preview as a rotated solid block so the
-            # preview mirrors the final mosaic's layout.
-            block = Image.new("RGB", (box_w, box_h), rgb)
+            # preview mirrors the final mosaic's layout. Rotated blocks get a
+            # small bleed so abutting tiles overlap instead of leaving seams.
+            bw, bh = (box_w + 2 * bleed, box_h + 2 * bleed) if rotated else (box_w, box_h)
+            block = Image.new("RGB", (bw, bh), rgb)
             if rotated:
-                bmask = Image.new("L", (box_w, box_h), 255)
+                bmask = Image.new("L", (bw, bh), 255)
                 block = block.rotate(p.angle, expand=True, resample=Image.BILINEAR)
                 bmask = bmask.rotate(p.angle, expand=True, resample=Image.BILINEAR)
             else:
@@ -162,6 +167,11 @@ def construct_box(image, images, mean_rgb, placements, properties):
     # the height follows from the frame aspect ratio.
     box_w = properties["final_box_height"]
     box_h = max(1, round(box_w / ratio))
+    # Rotated tiles meet along feathered, rounded edges, so abutting bricks can
+    # leave a hair-thin seam of background showing. Grow rotated tiles by a small
+    # bleed so neighbours overlap and cover the seam. Upright tiles (crossboard,
+    # brick) abut exactly and stay untouched.
+    bleed = max(1, round(box_h * 0.06))
 
     # Canvas: `rows` tiles tall, same aspect as the (preview) target image.
     aspect = image.size[0] / image.size[1]
@@ -173,14 +183,16 @@ def construct_box(image, images, mean_rgb, placements, properties):
     for index, p in enumerate(placements):
         terminal_process.hit()
 
-        temp_image = Image.open(images[index]).resize((box_w, box_h)).convert("RGB")
+        rotated = p.angle % 360 != 0
+        tw, th = (box_w + 2 * bleed, box_h + 2 * bleed) if rotated else (box_w, box_h)
+        temp_image = Image.open(images[index]).resize((tw, th)).convert("RGB")
         img_np = np.asarray(temp_image, dtype=np.float32)
         img_np = (img_np * alpha) + (np.asarray(mean_rgb[index], dtype=np.float32) * beta)
         tile = Image.fromarray(np.clip(img_np, 0, 255).astype(np.uint8))
         temp_image.close()
 
-        if p.angle % 360 != 0:
-            mask = Image.new("L", (box_w, box_h), 255)
+        if rotated:
+            mask = Image.new("L", (tw, th), 255)
             tile = tile.rotate(p.angle, expand=True, resample=Image.BILINEAR)
             mask = mask.rotate(p.angle, expand=True, resample=Image.BILINEAR)
         else:

@@ -123,8 +123,84 @@ class CircularTiling(TilingStrategy):
         return out
 
 
+class HerringboneTiling(TilingStrategy):
+    """The classic diagonal herringbone weave: rectangular tiles at +/-45 deg
+    interlocking in an L-step zig-zag.
+
+    Built on the standard gapless herringbone coloring -- each square cell of a
+    `W x W` grid belongs to exactly one brick decided by `(x + y) mod 2k`, so
+    bricks (k cells long) tile the plane with no holes -- then the whole pattern
+    is turned 45 deg for the diagonal look. `k` is the brick length in cells,
+    rounded from the frame aspect ratio.
+    """
+
+    name = "herringbone"
+
+    def placements(self, rows: int, ratio: float, aspect: float) -> list[Placement]:
+        w = 1.0 / rows                 # square cell side
+        k = max(2, round(ratio))       # brick length in cells
+        cx, cy = aspect / 2.0, 0.5
+        ca, sa = math.cos(math.radians(45)), math.sin(math.radians(45))
+
+        # Generate a square block of cells big enough that, once rotated 45 deg
+        # about the center, it still covers the whole canvas.
+        reach = int(math.ceil(math.hypot(aspect, 1.0) / w)) + 2 * k
+        ci, cj = round(cx / w), round(cy / w)
+
+        out: list[Placement] = []
+        for yi in range(cj - reach, cj + reach):
+            for xi in range(ci - reach, ci + reach):
+                m = (xi + yi) % (2 * k)
+                if m == 0:        # horizontal brick: cells xi .. xi+k-1
+                    u, v, angle = (xi + k / 2) * w, (yi + 0.5) * w, 0.0
+                elif m == k:      # vertical brick: cells yi .. yi+k-1
+                    u, v, angle = (xi + 0.5) * w, (yi + k / 2) * w, 90.0
+                else:
+                    continue
+                du, dv = u - cx, v - cy
+                ru, rv = cx + du * ca - dv * sa, cy + du * sa + dv * ca
+                if -0.1 <= ru <= aspect + 0.1 and -0.1 <= rv <= 1.1:
+                    out.append(Placement(ru, rv, angle + 45.0))
+        return out
+
+
+class SpiralTiling(TilingStrategy):
+    """A sunflower (Vogel) spiral: tiles spread from the center by the golden
+    angle (~137.5 deg), each turned tangent to its turn. Gives an even,
+    swirling distribution with no preferred axis."""
+
+    name = "spiral"
+
+    def placements(self, rows: int, ratio: float, aspect: float) -> list[Placement]:
+        h_n = 1.0 / rows
+        w_n = h_n * ratio
+        cx, cy = aspect / 2.0, 0.5
+        golden = math.pi * (3.0 - math.sqrt(5.0))
+        # Spacing so each point owns roughly one tile's worth of area.
+        spacing = math.sqrt(w_n * h_n / math.pi)
+        max_r = math.hypot(cx, cy)
+        count = int((max_r / spacing) ** 2) + 1
+
+        out: list[Placement] = []
+        for i in range(count):
+            r = spacing * math.sqrt(i)
+            theta = i * golden
+            u = cx + r * math.cos(theta)
+            v = cy + r * math.sin(theta)
+            if 0.0 <= u <= aspect and 0.0 <= v <= 1.0:
+                out.append(Placement(u, v, 90.0 - math.degrees(theta)))
+        return out
+
+
 _STRATEGIES = {
-    s.name: s for s in (CrossboardTiling(), BrickTiling(), CircularTiling())
+    s.name: s
+    for s in (
+        CrossboardTiling(),
+        BrickTiling(),
+        CircularTiling(),
+        HerringboneTiling(),
+        SpiralTiling(),
+    )
 }
 
 

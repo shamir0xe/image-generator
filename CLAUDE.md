@@ -22,7 +22,7 @@ Run the CLI (entry point is `main.py`, built with Typer):
 python main.py gen --movie-name "Paris Texas" --movie-format "mkv" --generate-frames
 # Subsequent runs reuse cached frames — drop --generate-frames
 python main.py gen --movie-name "Paris Texas" --movie-format "mkv"
-# Pick a tile layout: crossboard (default), brick, or circular
+# Pick a tile layout: crossboard (default), brick, circular, herringbone, spiral
 python main.py gen --movie-name "Paris Texas" --movie-format "mkv" --tiling circular
 
 # Other subcommands
@@ -47,7 +47,7 @@ Copy `sample.env` → `.env`. All tuning happens through env vars, read once in 
 
 The `gen` command (`main()`) orchestrates everything; understanding it explains the whole project:
 
-1. **Lay out the tiles** — a tiling strategy (`src/tiling.py`, selected with `--tiling`, default `crossboard`) emits an ordered, *flat* list of `Placement`s (normalized center `u,v` + rotation `angle`). The same list drives both the sampling and render passes, so cell `i` always means the same tile. Available strategies: `crossboard` (aligned grid), `brick` (every other row shifted half a tile), `circular` (concentric rings, each tile turned tangent to its radius). Add a new one by subclassing `TilingStrategy` and listing it in `_STRATEGIES`.
+1. **Lay out the tiles** — a tiling strategy (`src/tiling.py`, selected with `--tiling`, default `crossboard`) emits an ordered, *flat* list of `Placement`s (normalized center `u,v` + rotation `angle`). The same list drives both the sampling and render passes, so cell `i` always means the same tile. Available strategies: `crossboard` (aligned grid), `brick` (every other row shifted half a tile), `circular` (concentric rings, each tile turned tangent to its radius), `herringbone` (gapless diagonal +/-45 weave via the `(x+y) mod 2k` brick coloring), `spiral` (golden-angle Vogel/sunflower spread). Add a new one by subclassing `TilingStrategy` and listing it in `_STRATEGIES`.
 2. **Sample the target** — `ImageModifier.tile_target()` walks the placements and averages the upscaled target over each tile's *rotated* footprint (the same rectangle `construct_box` later fills, so colors match), returning a blocky preview (tiles drawn rotated, mirroring the final mosaic) and a flat `mean_rgb` list (one color per placement, in order).
 3. **Get frames** — `get_movie_frames()` either samples new frames (`MovieSampler` + `Movie`, OpenCV grabs one frame per second of runtime, shuffles, keeps `frame_count_per_box`) or loads cached `.jpg`s from `movie_frames_path/{standard_name}/`.
 4. **Compute frame colors** — `calculate_movie_rgbs()` builds/reads `assets/{name}-{count}.csv` mapping each frame filename → mean RGB.
