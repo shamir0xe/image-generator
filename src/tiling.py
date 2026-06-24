@@ -80,9 +80,18 @@ class BrickTiling(TilingStrategy):
         cols = max(1, math.ceil(aspect / w_n))
         out: list[Placement] = []
         for j in range(rows):
-            shift = w_n / 2.0 if j % 2 == 1 else 0.0
+            v = (j + 0.5) * h_n
+            if j % 2 == 1:
+                # Shifted row: fill the half-tile notch the shift opens on the
+                # left with an edge brick (the canvas clips it to a half-brick),
+                # so the row reads as a real brick course, not a black gap. Its
+                # color is sampled from that spot, so it matches its neighbours.
+                out.append(Placement(0.0, v))
+                shift = w_n / 2.0
+            else:
+                shift = 0.0
             for i in range(cols):
-                out.append(Placement((i + 0.5) * w_n + shift, (j + 0.5) * h_n))
+                out.append(Placement((i + 0.5) * w_n + shift, v))
         return out
 
 
