@@ -26,7 +26,6 @@ python main.py gen --movie-name "Paris Texas" --movie-format "mkv"
 # Other subcommands
 python main.py sampling   --movie-name "Paris Texas"   # only extract frames
 python main.py clear-cache --movie-name "Paris Texas"  # delete frames + rgb csv cache
-python main.py modify     --movie-name "paris texas"   # post-process highlights pass
 python main.py crop       --image-path path/to/img.jpg # crop to A3 ratio + downscale
 ```
 

@@ -22,26 +22,6 @@ class ImageModifier:
         return Image.open(image_path)
 
     @staticmethod
-    def add_highlights(img1: Image.Image, img2: Image.Image):
-        # img1 * alpha + img2 * beta
-        alpha, beta = 0.8, 0.6
-
-        mul = lambda tup, t: tuple([k * t for k in tup])
-
-        img2 = img2.resize(mul(img2.size, 15))
-        img1 = img1.resize(img2.size)
-
-        img1_np = np.array(img1).astype(np.float32)
-        img1.close()
-        img2_np = np.array(img2).astype(np.float32)
-        img2.close()
-
-        blend_image = img1_np * alpha + img2_np * beta
-        blend_image = np.clip(blend_image, 0, 255)
-
-        return Image.fromarray(blend_image.astype(np.uint8))
-
-    @staticmethod
     def find_ratio(x: int, y: int) -> tuple[int, int]:
         ratio = -1
         res = (-1, -1)

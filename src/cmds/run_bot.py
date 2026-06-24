@@ -75,25 +75,6 @@ def clear_cache(
             os.remove(os.path.join("assets", filename))
             logger.info(f"Removed {filename}")
 
-
-@app.command(name="modify")
-def post_modification(
-        movie_name: Annotated[
-            str, typer.Option(help="The movie name available in the path")
-        ],
-        use_gpu: Annotated[bool, typer.Option(help="Force to use GPU")] = False,
-):
-    st_name = "-".join(movie_name.lower().split())
-    origin_img = ImageModifier.open(f"assets/{st_name}.png")
-    gen_img = ImageModifier.open(f"assets/{st_name}-o1.png")
-
-    if use_gpu:
-        modified_img = ImageModifier.add_highlights_mac_gpu(gen_img, origin_img)
-    else:
-        modified_img = ImageModifier.add_highlights(gen_img, origin_img)
-    modified_img.save(f"assets/{st_name}-o2.png")
-
-
 def get_movie_frames(standard_name: str, envs: dict, generate_frames: bool):
     if generate_frames:
         logger.info("Generating frames...")
