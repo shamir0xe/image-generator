@@ -115,10 +115,12 @@ class ImageModifier:
                 rgb = tuple(int(v) for v in arr.mean(axis=0))
             mean_rgb.append(rgb)  # pyright: ignore
 
-            # Draw the cell into the preview as a rotated solid block so the
-            # preview mirrors the final mosaic's layout. Rotated blocks get a
-            # small bleed so abutting tiles overlap instead of leaving seams.
-            bw, bh = (box_w + 2 * bleed, box_h + 2 * bleed) if rotated else (box_w, box_h)
+            # Draw the cell into the preview as a (possibly rotated) solid block
+            # so the preview mirrors the final mosaic's layout. Tiles get a bleed
+            # so abutting blocks overlap instead of leaving seams -- a wide one
+            # for rotated tiles, 1px for upright ones (covers rounding seams).
+            b = bleed if rotated else 1
+            bw, bh = box_w + 2 * b, box_h + 2 * b
             block = Image.new("RGB", (bw, bh), rgb)
             if rotated:
                 bmask = Image.new("L", (bw, bh), 255)
@@ -183,8 +185,12 @@ def construct_box(image, images, mean_rgb, placements, properties):
     for index, p in enumerate(placements):
         terminal_process.hit()
 
+        # Upright tiles still get a 1px bleed: column spacing is a float while
+        # the block width is rounded, so without overlap the rounding can leave
+        # hair-thin seams (vertical/horizontal black lines) between tiles.
         rotated = p.angle % 360 != 0
-        tw, th = (box_w + 2 * bleed, box_h + 2 * bleed) if rotated else (box_w, box_h)
+        b = bleed if rotated else 1
+        tw, th = box_w + 2 * b, box_h + 2 * b
         temp_image = Image.open(images[index]).resize((tw, th)).convert("RGB")
         img_np = np.asarray(temp_image, dtype=np.float32)
         img_np = (img_np * alpha) + (np.asarray(mean_rgb[index], dtype=np.float32) * beta)
