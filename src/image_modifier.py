@@ -46,7 +46,17 @@ class ImageModifier:
         return res
 
     @staticmethod
-    def get_blured(image_path, properties):
+    def tile_target(image_path, properties):
+        """Sample the target's mean color under each tile placement.
+
+        Walks `properties["placements"]` (from a tiling strategy) in order and,
+        for each, averages the target pixels over the tile's *rotated* footprint
+        -- the same rectangle (size and angle) that `construct_box` later fills
+        -- so the sampled color matches what gets placed there. Returns a blocky
+        preview (with the tiles drawn rotated, mirroring the final render) and a
+        *flat* list of per-placement mean RGBs in placement order, ready to feed
+        straight into the matcher.
+        """
         image = image_path if isinstance(image_path, Image.Image) else Image.open(image_path)
         x_len, y_len = image.size
 
@@ -54,60 +64,70 @@ class ImageModifier:
         factor = properties["upsample"]
         image = image.resize((x_len * factor, y_len * factor))
         x_len, y_len = image.size
-        res_image = Image.new("RGB", image.size)
 
         logger.info(f"img size {x_len}, {y_len}")
 
-        # Cells take the frame's aspect ratio so whole frames tile the target
-        # without cropping. `box` is the number of cells along one axis: by
-        # height (default) the cell count follows the height, by width it
-        # follows the width -- pick whichever keeps the mosaic dense enough.
-        if properties.get("box_axis", "height") == "width":
-            box = {"x": max(1, round(x_len / properties["box"]))}
-            box["y"] = max(1, round(box["x"] / properties["ratio"]))
-        else:
-            box = {"y": max(1, round(y_len / properties["box"]))}
-            box["x"] = max(1, round(box["y"] * properties["ratio"]))
+        rows = max(1, properties["box"])
+        ratio = properties["ratio"]
+        placements = properties["placements"]
 
-        logger.info(f"x, y: {box['x']}, {box['y']}")
+        # Uniform tile size in pixels: height drives it, width follows the ratio.
+        th = y_len / rows
+        tw = th * ratio
+        box_w, box_h = max(1, round(tw)), max(1, round(th))
+        # A square crop big enough to hold the tile at any rotation.
+        diag = int(math.ceil(math.hypot(box_w, box_h)))
+        c = diag / 2.0
+        cx0, cy0 = round(c - box_w / 2), round(c - box_h / 2)
 
-        count = (math.ceil(x_len / box["x"]), math.ceil(y_len / box["y"]))
-        mean_rgb = [[(0, 0, 0) for _ in range(count[0])] for _ in range(count[1])]
-        data = list(image.getdata())  # pyright: ignore
-        res_data = res_image.load()
-        if res_data is None:
-            raise Exception("result data is None!")
-        terminal_process = TerminalProcess(count[0] * count[1])
-        for i in range(count[0]):
-            for j in range(count[1]):
-                terminal_process.hit()
-                rgb = (0, 0, 0)
-                total = 0
-                ii = 0
-                while ii < box["x"] and i * box["x"] + ii < x_len:
-                    jj = 0
-                    while jj < box["y"] and j * box["y"] + jj < y_len:
-                        rgb = tuple(
-                            map(
-                                operator.add,
-                                rgb,
-                                data[(j * box["y"] + jj) * x_len + i * box["x"] + ii],
-                            )
-                        )
-                        jj += 1
-                        total += 1
-                    ii += 1
-                rgb = tuple(map(operator.mul, rgb, (1 / total, 1 / total, 1 / total)))
-                rgb = tuple(map(math.floor, rgb))
-                mean_rgb[j][i] = rgb
-                ii = 0
-                while ii < box["x"] and i * box["x"] + ii < x_len:
-                    jj = 0
-                    while jj < box["y"] and j * box["y"] + jj < y_len:
-                        res_data[i * box["x"] + ii, j * box["y"] + jj] = rgb
-                        jj += 1
-                    ii += 1
-        return res_image, mean_rgb
+        # Reusable 255 image to mark which cropped pixels are inside the target
+        # (so rotated/edge tiles don't average in the black padding).
+        valid_full = Image.new("L", (x_len, y_len), 255)
+
+        preview = Image.new("RGB", (x_len, y_len))
+        mean_rgb: list[tuple[int, int, int]] = []
+        terminal_process = TerminalProcess(len(placements))
+        for p in placements:
+            terminal_process.hit()
+            # u runs 0..aspect, v runs 0..1, both scaled by the height in px.
+            cx, cy = p.u * y_len, p.v * y_len
+            left, top = round(cx - c), round(cy - c)
+            rotated = p.angle % 360 != 0
+
+            # Crop a square around the center, rotate the tile upright, then
+            # take the central box_w x box_h -- the tile's true footprint.
+            patch = image.crop((left, top, left + diag, top + diag))
+            if rotated:
+                patch = patch.rotate(-p.angle, resample=Image.BILINEAR)
+            tile = patch.crop((cx0, cy0, cx0 + box_w, cy0 + box_h))
+            arr = np.asarray(tile, dtype=np.float64).reshape(-1, 3)
+
+            if left < 0 or top < 0 or left + diag > x_len or top + diag > y_len:
+                vmask = valid_full.crop((left, top, left + diag, top + diag))
+                if rotated:
+                    vmask = vmask.rotate(-p.angle, resample=Image.NEAREST)
+                inside = np.asarray(vmask.crop((cx0, cy0, cx0 + box_w, cy0 + box_h))).reshape(-1) > 127
+                rgb = tuple(int(v) for v in arr[inside].mean(axis=0)) if inside.any() else (0, 0, 0)
+            else:
+                rgb = tuple(int(v) for v in arr.mean(axis=0))
+            mean_rgb.append(rgb)  # pyright: ignore
+
+            # Draw the cell into the preview as a rotated solid block so the
+            # preview mirrors the final mosaic's layout.
+            block = Image.new("RGB", (box_w, box_h), rgb)
+            if rotated:
+                bmask = Image.new("L", (box_w, box_h), 255)
+                block = block.rotate(p.angle, expand=True, resample=Image.BILINEAR)
+                bmask = bmask.rotate(p.angle, expand=True, resample=Image.BILINEAR)
+            else:
+                bmask = None
+            preview.paste(
+                block,
+                (round(cx - block.size[0] / 2), round(cy - block.size[1] / 2)),
+                bmask,
+            )
+
+        return preview, mean_rgb
 
     @staticmethod
     def get_mean_rgb(image):
@@ -121,43 +141,54 @@ class ImageModifier:
         return rgb
 
 
-def construct_box(image, images, mean_rgb, properties):
+def construct_box(image, images, mean_rgb, placements, properties):
+    """Render the mosaic by dropping each matched frame onto its placement.
+
+    Walks `placements` in lockstep with `images`/`mean_rgb` (cell `i` of each),
+    tints the frame toward the cell's target color via alpha/beta, rotates it by
+    the placement's angle, and pastes it at the placement center. Rotated tiles
+    keep a mask so their corners stay transparent and the preview shows through
+    the seams (e.g. between circular rings).
+    """
     alpha, beta = (
         properties["color_mixtures"]["alpha"],
         properties["color_mixtures"]["beta"],
     )
-    count = (properties["dimensions"]["x"], properties["dimensions"]["y"])
+    ratio = properties["ratio"]
+    rows = max(1, properties["rows"])
 
-    # Each tile takes the frame's aspect ratio, so a whole frame drops in with a
-    # plain resize -- no cropping, no stretching (only the optional crop_box
-    # applied at sampling time changes a frame). The canvas is sized to the tile
-    # grid exactly so every cell lands inside it.
-    box = {"x": properties["final_box_height"]}
-    box["y"] = max(1, round(box["x"] / properties["ratio"]))
-    x_len, y_len = box["x"] * count[0], box["y"] * count[1]
-    image = image.resize((x_len, y_len))
+    # Tile pixel size. `final_box_height` sets the tile width (kept for
+    # backwards compatibility -- it has always driven the larger dimension);
+    # the height follows from the frame aspect ratio.
+    box_w = properties["final_box_height"]
+    box_h = max(1, round(box_w / ratio))
 
-    canvas_np = np.array(image).astype(np.float32)
+    # Canvas: `rows` tiles tall, same aspect as the (preview) target image.
+    aspect = image.size[0] / image.size[1]
+    y_len = rows * box_h
+    x_len = max(1, round(aspect * y_len))
+    canvas = image.resize((x_len, y_len)).convert("RGB")
 
-    terminal_process = TerminalProcess(count[0] * count[1])
-    for i in range(count[0]):
-        for j in range(count[1]):
-            index = count[0] * j + i
-            terminal_process.hit()
+    terminal_process = TerminalProcess(len(placements))
+    for index, p in enumerate(placements):
+        terminal_process.hit()
 
-            temp_image = Image.open(images[index]).resize((box["x"], box["y"]))
-            img_np = np.array(temp_image).astype(np.float32)
-            img_np = (img_np * alpha) + (np.array(mean_rgb[j][i]) * beta)
+        temp_image = Image.open(images[index]).resize((box_w, box_h)).convert("RGB")
+        img_np = np.asarray(temp_image, dtype=np.float32)
+        img_np = (img_np * alpha) + (np.asarray(mean_rgb[index], dtype=np.float32) * beta)
+        tile = Image.fromarray(np.clip(img_np, 0, 255).astype(np.uint8))
+        temp_image.close()
 
-            y_start = j * box["y"]
-            x_start = i * box["x"]
-            canvas_np[
-                y_start : y_start + box["y"],
-                x_start : x_start + box["x"],
-            ] = img_np
+        if p.angle % 360 != 0:
+            mask = Image.new("L", (box_w, box_h), 255)
+            tile = tile.rotate(p.angle, expand=True, resample=Image.BILINEAR)
+            mask = mask.rotate(p.angle, expand=True, resample=Image.BILINEAR)
+        else:
+            mask = None
 
-            temp_image.close()
+        cx, cy = p.u * y_len, p.v * y_len
+        x = round(cx - tile.size[0] / 2)
+        y = round(cy - tile.size[1] / 2)
+        canvas.paste(tile, (x, y), mask)
 
-    canvas_np = canvas_np.clip(0, 255)
-    canvas_np = canvas_np.astype(np.uint8)
-    return Image.fromarray(canvas_np)
+    return canvas

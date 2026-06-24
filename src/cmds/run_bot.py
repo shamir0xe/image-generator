@@ -12,6 +12,7 @@ from pathlib import Path
 from pylib_0xe.file.file import File
 import typer
 from src.image_modifier import ImageModifier, construct_box
+from src.tiling import get_tiling, tiling_names
 from src.movie_sampler import MovieSampler
 from src.movie import Movie
 from src.min_cost_matcher import MinCostMatcher
@@ -278,8 +279,17 @@ def main(
                 "height (denser mosaic when frames are wide)",
             ),
         ] = False,
+        tiling: Annotated[
+            str,
+            typer.Option(
+                help=f"Tile layout strategy. One of: {', '.join(tiling_names())}",
+            ),
+        ] = "crossboard",
 ):
     logging.info(f"Processing {movie_name}.{movie_format}")
+
+    tiling_strategy = get_tiling(tiling)
+    logger.info(f"tiling = {tiling_strategy.name}")
 
     envs = read_envs()
     envs["movie_path"] += f"{movie_name}.{movie_format}"
@@ -311,26 +321,38 @@ def main(
     # the image we actually keep (the end-of-pipeline crop would otherwise trim
     # rows/columns the grid had already counted).
     target = crop_image(Image.open(envs["image_path"]))
-    image, mean_rgbs = ImageModifier.get_blured(
+
+    # `box` counts tiles along the height by default; --by-width converts that
+    # into the equivalent row count so the chosen axis stays the dense one.
+    aspect = target.size[0] / target.size[1]
+    rows = envs["box"]
+    if by_width:
+        rows = max(1, round(envs["box"] * envs["ratio"] / aspect))
+
+    # The tiling strategy lays out every tile once; both the sampling pass and
+    # the render pass walk this identical list, so cell `i` is the same tile.
+    placements = tiling_strategy.placements(rows, envs["ratio"], aspect)
+    logger.info(f"tiles = {len(placements)} (rows={rows})")
+
+    image, mean_rgbs = ImageModifier.tile_target(
         target,
         {
-            "box": envs["box"],
+            "box": rows,
             "upsample": envs["upsample"],
             "ratio": envs["ratio"],
-            "box_axis": "width" if by_width else "height",
+            "placements": placements,
         },
     )
     image.show(movie_name)
     image.save(f"assets/{standard_name}.png")
 
-    dimensions = (len(mean_rgbs[0]), len(mean_rgbs))
-    logger.info(f"dimensions = {dimensions}")
-
     logger.info("Calculating rgbs for frames...")
     movie_rgbs = calculate_movie_rgbs(standard_name, movie_frames, envs)
 
     logger.info("Running MaxMatcher algorithm...")
-    max_matcher = MinCostMatcher(mean_rgbs, movie_rgbs, envs["knn_ratio"])
+    # The matcher flattens row-major; the placement list is already flat, so
+    # wrap it as a single row.
+    max_matcher = MinCostMatcher([mean_rgbs], movie_rgbs, envs["knn_ratio"])
     if capacity is not None:
         order = max_matcher.solve(capacity)[0]
     else:
@@ -342,8 +364,9 @@ def main(
         image,
         [movie_frames[order[i]] for i in range(len(order))],
         mean_rgbs,
+        placements,
         {
-            "dimensions": {"x": dimensions[0], "y": dimensions[1]},
+            "rows": rows,
             "ratio": envs["ratio"],
             "color_mixtures": {"alpha": envs["alpha"], "beta": envs["beta"]},
             "final_box_height": envs["final_box_height"],

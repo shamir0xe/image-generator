@@ -22,6 +22,8 @@ Run the CLI (entry point is `main.py`, built with Typer):
 python main.py gen --movie-name "Paris Texas" --movie-format "mkv" --generate-frames
 # Subsequent runs reuse cached frames — drop --generate-frames
 python main.py gen --movie-name "Paris Texas" --movie-format "mkv"
+# Pick a tile layout: crossboard (default), brick, or circular
+python main.py gen --movie-name "Paris Texas" --movie-format "mkv" --tiling circular
 
 # Other subcommands
 python main.py sampling   --movie-name "Paris Texas"   # only extract frames
@@ -45,12 +47,13 @@ Copy `sample.env` → `.env`. All tuning happens through env vars, read once in 
 
 The `gen` command (`main()`) orchestrates everything; understanding it explains the whole project:
 
-1. **Blur the target** — `ImageModifier.get_blured()` divides the upscaled target image into a grid of boxes and returns both a blocky preview image and a 2D `mean_rgb[y][x]` grid. Box dimensions are derived from `find_ratio()`, which approximates the image's aspect ratio as a small integer fraction so boxes tile cleanly.
-2. **Get frames** — `get_movie_frames()` either samples new frames (`MovieSampler` + `Movie`, OpenCV grabs one frame per second of runtime, shuffles, keeps `frame_count_per_box`) or loads cached `.jpg`s from `movie_frames_path/{standard_name}/`.
-3. **Compute frame colors** — `calculate_movie_rgbs()` builds/reads `assets/{name}-{count}.csv` mapping each frame filename → mean RGB.
-4. **Match** — `MinCostMatcher` (`src/min_cost_matcher.py`) builds a min-cost-flow graph (via `MinCostFlow` wrapping OR-Tools, `src/utils/min_cost_flow.py`): source → each target box (cap 1) → each frame (cost = Euclidean RGB distance) → sink (cap `max_same_picture`). `best_match()` binary-searches the per-frame reuse capacity to find the cheapest assignment.
-5. **Render** — `construct_box()` (`src/image_modifier.py`) pastes the chosen frame into each cell, blended with that cell's target color via alpha/beta, on a NumPy canvas.
-6. **Save + crop** — `save_out_image()` auto-increments `outputs/{name}-o{i}.jpg`, then `crop_image()` produces an A3-ratio version and `final_job()` downscales it in-process with Pillow.
+1. **Lay out the tiles** — a tiling strategy (`src/tiling.py`, selected with `--tiling`, default `crossboard`) emits an ordered, *flat* list of `Placement`s (normalized center `u,v` + rotation `angle`). The same list drives both the sampling and render passes, so cell `i` always means the same tile. Available strategies: `crossboard` (aligned grid), `brick` (every other row shifted half a tile), `circular` (concentric rings, each tile turned tangent to its radius). Add a new one by subclassing `TilingStrategy` and listing it in `_STRATEGIES`.
+2. **Sample the target** — `ImageModifier.tile_target()` walks the placements and averages the upscaled target over each tile's *rotated* footprint (the same rectangle `construct_box` later fills, so colors match), returning a blocky preview (tiles drawn rotated, mirroring the final mosaic) and a flat `mean_rgb` list (one color per placement, in order).
+3. **Get frames** — `get_movie_frames()` either samples new frames (`MovieSampler` + `Movie`, OpenCV grabs one frame per second of runtime, shuffles, keeps `frame_count_per_box`) or loads cached `.jpg`s from `movie_frames_path/{standard_name}/`.
+4. **Compute frame colors** — `calculate_movie_rgbs()` builds/reads `assets/{name}-{count}.csv` mapping each frame filename → mean RGB.
+5. **Match** — `MinCostMatcher` (`src/min_cost_matcher.py`) builds a min-cost-flow graph (via `MinCostFlow` wrapping OR-Tools, `src/utils/min_cost_flow.py`): source → each target cell (cap 1) → each frame (cost = Euclidean RGB distance) → sink (cap `max_same_picture`). `best_match()` binary-searches the per-frame reuse capacity to find the cheapest assignment. It flattens its input row-major, so the flat placement color list is passed wrapped as a single row.
+6. **Render** — `construct_box()` (`src/image_modifier.py`) walks the placements in lockstep with the matched frames, tints each frame toward its cell color via alpha/beta, rotates it by the placement angle, and pastes it (with a mask, so rotated corners stay transparent) onto a canvas seeded from the preview.
+7. **Save + crop** — `save_out_image()` auto-increments `outputs/{name}-o{i}.jpg`, then `crop_image()` produces an A3-ratio version and `final_job()` downscales it in-process with Pillow.
 
 ## Naming conventions that matter
 
