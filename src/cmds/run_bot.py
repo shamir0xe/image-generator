@@ -285,6 +285,14 @@ def main(
                 help=f"Tile layout strategy. One of: {', '.join(tiling_names())}",
             ),
         ] = "crossboard",
+        color_match: Annotated[
+            str,
+            typer.Option(
+                help="Color metric for matching tiles to frames: 'rgb' (legacy), "
+                "'lab' (perceptual), or 'lab-norm' (lab + align target "
+                "exposure/contrast to the frame palette)",
+            ),
+        ] = "lab-norm",
 ):
     logging.info(f"Processing {movie_name}.{movie_format}")
 
@@ -352,7 +360,9 @@ def main(
     logger.info("Running MaxMatcher algorithm...")
     # The matcher flattens row-major; the placement list is already flat, so
     # wrap it as a single row.
-    max_matcher = MinCostMatcher([mean_rgbs], movie_rgbs, envs["knn_ratio"])
+    max_matcher = MinCostMatcher(
+        [mean_rgbs], movie_rgbs, envs["knn_ratio"], metric=color_match
+    )
     if capacity is not None:
         order = max_matcher.solve(capacity)[0]
     else:

@@ -8,8 +8,46 @@ from src.utils.min_cost_flow import MinCostFlow
 logger = logging.getLogger(__name__)
 
 
+def _srgb_to_lab(rgb: np.ndarray) -> np.ndarray:
+    """Convert an (..., 3) array of 0-255 sRGB to CIELAB (D65).
+
+    Euclidean distance in Lab approximates perceived color difference ( delta E),
+    which matches colors far better than raw RGB distance.
+    """
+    arr = np.asarray(rgb, dtype=np.float64) / 255.0
+    # sRGB -> linear RGB
+    lin = np.where(arr > 0.04045, ((arr + 0.055) / 1.055) ** 2.4, arr / 12.92)
+    # linear RGB -> XYZ (sRGB/D65 matrix)
+    m = np.array(
+        [
+            [0.4124564, 0.3575761, 0.1804375],
+            [0.2126729, 0.7151522, 0.0721750],
+            [0.0193339, 0.1191920, 0.9503041],
+        ]
+    )
+    xyz = lin @ m.T
+    # normalize by the D65 reference white
+    xyz /= np.array([0.95047, 1.0, 1.08883])
+    eps, kappa = 0.008856, 903.3
+    f = np.where(xyz > eps, np.cbrt(xyz), (kappa * xyz + 16.0) / 116.0)
+    return np.stack(
+        [
+            116.0 * f[..., 1] - 16.0,
+            500.0 * (f[..., 0] - f[..., 1]),
+            200.0 * (f[..., 1] - f[..., 2]),
+        ],
+        axis=-1,
+    )
+
+
 class MinCostMatcher:
-    def __init__(self, image_rgbs, frame_rgbs, knn_ratio: float = 0.1):
+    def __init__(
+        self,
+        image_rgbs,
+        frame_rgbs,
+        knn_ratio: float = 0.1,
+        metric: str = "lab-norm",
+    ):
         # Flatten the 2D grid of cell colors into (n, 3), row-major (y * w + x)
         # to match how construct_box indexes the result.
         cells = []
@@ -21,9 +59,20 @@ class MinCostMatcher:
         self.n = len(self.cells)
         self.m = len(self.frames)
 
+        # Choose the feature space the matcher measures distances in:
+        #   rgb      -- raw mean RGB (legacy; not perceptual).
+        #   lab      -- CIELAB, so distance ~ perceived color difference.
+        #   lab-norm -- lab, then align the target cells' per-channel mean and
+        #               std to the frame pool's (Reinhard transfer). This is the
+        #               fix for targets whose exposure/contrast doesn't sit on
+        #               the frame palette: mean aligns exposure, std aligns
+        #               contrast, so the limited frame range is used fully.
+        cell_feat, frame_feat = self._features(metric)
+        logger.info(f"match metric: {metric}")
+
         # Instead of connecting every cell to every frame (n * m edges), connect
-        # each cell only to its k nearest frames in RGB space. A KD-tree makes
-        # this exact and fast for 3D color points.
+        # each cell only to its k nearest frames in feature space. A KD-tree
+        # makes this exact and fast for 3D color points.
         k = max(1, min(self.m, round(self.m * knn_ratio)))
         self.k = k
         logger.info(
@@ -31,8 +80,8 @@ class MinCostMatcher:
             f"cells={self.n}"
         )
 
-        tree = cKDTree(self.frames)
-        dist, idx = tree.query(self.cells, k=k)
+        tree = cKDTree(frame_feat)
+        dist, idx = tree.query(cell_feat, k=k)
         # query() returns 1-D arrays when k == 1; normalize to (n, k).
         self.cand_idx = idx.reshape(self.n, k)
         self.cand_dist = np.rint(dist.reshape(self.n, k)).astype(np.int64)
@@ -42,6 +91,26 @@ class MinCostMatcher:
         self._cand_tails = np.repeat(np.arange(self.n), k)
         self._cand_heads = (self.n + self.cand_idx).reshape(-1)
         self._cand_weights = self.cand_dist.reshape(-1)
+
+    def _features(self, metric: str):
+        """Return (cell_features, frame_features) for the chosen metric."""
+        if metric == "rgb":
+            return self.cells, self.frames
+
+        cell_lab = _srgb_to_lab(self.cells)
+        frame_lab = _srgb_to_lab(self.frames)
+
+        if metric == "lab-norm":
+            # Reinhard transfer: shift+scale the cells so their per-channel mean
+            # and spread match the frame pool's, in Lab.
+            mc, sc = cell_lab.mean(axis=0), cell_lab.std(axis=0)
+            mf, sf = frame_lab.mean(axis=0), frame_lab.std(axis=0)
+            sc = np.where(sc < 1e-6, 1.0, sc)  # avoid divide-by-zero on flat targets
+            cell_lab = (cell_lab - mc) / sc * sf + mf
+        elif metric != "lab":
+            raise ValueError(f"unknown match metric '{metric}' (rgb|lab|lab-norm)")
+
+        return cell_lab, frame_lab
 
     def best_match(self):
         # Factor for the cost in order to determine the best matching
